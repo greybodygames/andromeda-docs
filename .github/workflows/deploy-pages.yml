@@ -1,0 +1,84 @@
+name: Deploy to GitHub Pages
+
+on:
+  repository_dispatch:
+    types:
+      - deploy-pages
+  workflow_dispatch:
+    inputs:
+      source_run_id:
+        description: Source Andromeda workflow run ID
+        required: true
+        type: string
+      source_sha:
+        description: Source Andromeda commit SHA for traceability
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (
+        github.event.client_payload.app == 'andromeda-docs' &&
+        github.event.client_payload.artifact_name == 'site-andromeda-docs' &&
+        github.event.client_payload.source_repository == 'greybodygames/andromeda'
+      )
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    env:
+      SOURCE_REPOSITORY: greybodygames/andromeda
+      SOURCE_RUN_ID: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.source_run_id || inputs.source_run_id }}
+      SOURCE_SHA: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.source_sha || inputs.source_sha }}
+
+    steps:
+      - name: Download generated site
+        uses: actions/download-artifact@v8
+        with:
+          name: site-andromeda-docs
+          path: site
+          github-token: ${{ secrets.DOCS_PUBLISHER_TOKEN }}
+          repository: ${{ env.SOURCE_REPOSITORY }}
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          digest-mismatch: error
+
+      - name: Validate generated site
+        shell: bash
+        run: |
+          test -n "$SOURCE_RUN_ID"
+          test -f site/index.html
+
+          if find site -type l -print -quit | grep -q .; then
+            echo "Generated output must not contain symbolic links." >&2
+            exit 1
+          fi
+
+          echo "Deploying andromeda-docs from ${SOURCE_REPOSITORY}@${SOURCE_SHA} (run ${SOURCE_RUN_ID})."
+
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v6
+
+      - name: Upload GitHub Pages artifact
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: ./site
+          include-hidden-files: true
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v5
